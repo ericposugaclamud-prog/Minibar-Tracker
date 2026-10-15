@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minibar Expiry & Stock</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1b1f24;--mu:#667085;--bd:#e3e6ea;--ac:#1f6feb;--bad:#d92d20;--warn:#b54708;--ok:#067647;--badbg:#fee4e2;--warnbg:#fef0c7;--okbg:#d1fadf;--nbg:#eef0f3}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--card:#171c23;--tx:#e8ebef;--mu:#98a2b3;--bd:#2a313b;--ac:#58a6ff;--bad:#f97066;--warn:#fdb022;--ok:#47cd89;--badbg:#3a1614;--warnbg:#3a2a0b;--okbg:#0f2e20;--nbg:#232a33}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--tx)}
+header{padding:18px 20px 6px}h1{margin:0;font-size:20px}.sub{color:var(--mu);font-size:12px;margin-top:2px}
+main{padding:10px 20px 40px;max-width:1200px;margin:auto}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0}
+.kpi{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px 14px}.kpi b{display:block;font-size:24px}.kpi span{color:var(--mu);font-size:12px}
+.tabs{display:flex;gap:6px;margin:14px 0 10px;flex-wrap:wrap}.tabs button{border:1px solid var(--bd);background:var(--card);color:var(--tx);padding:7px 14px;border-radius:8px;cursor:pointer;font:inherit}.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.bar input,.bar select,.bar button{padding:7px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);font:inherit}.bar input{flex:1;min-width:160px}.bar button{cursor:pointer}
+.wrap{background:var(--card);border:1px solid var(--bd);border-radius:10px;overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:640px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--bd);white-space:nowrap}th{position:sticky;top:0;background:var(--card);font-size:12px;color:var(--mu);cursor:pointer;user-select:none}td.n,th.n{text-align:right}
+tr:last-child td{border-bottom:0}
+.pill{padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}.Expired{background:var(--badbg);color:var(--bad)}.Soon{background:var(--warnbg);color:var(--warn)}.Valid{background:var(--okbg);color:var(--ok)}.NoDate{background:var(--nbg);color:var(--mu)}
+.meta{color:var(--mu);font-size:12px;margin:8px 2px}.hide{display:none}
+</style>
+</head>
+<body>
+<header><h1>Minibar Expiry & Stock</h1><div class="sub" id="sub">Loading…</div></header>
+<main>
+<div class="kpis" id="kpis"></div>
+<div class="tabs" id="tabs"><button data-t="exp" class="on">Expiry</button><button data-t="reg">Register</button><button data-t="sum">Floor Summary</button></div>
+<div id="filters" class="bar">
+ <input id="q" placeholder="Search item or room…">
+ <select id="fFloor"><option value="">All floors</option></select>
+ <select id="fType"><option value="">All types</option></select>
+ <select id="fCond"><option value="">All conditions</option><option>Expired</option><option>Soon</option><option>Valid</option><option>NoDate</option></select>
+ <select id="fStatus"><option value="">All status</option></select>
+ <button id="csv">Export CSV</button>
+</div>
+<div class="wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+<div class="meta" id="meta"></div>
+</main>
+<script>
+const FLOORS=['Basement','2nd','3rd','4th','5th','6th','7th','8th','9th'];
+const $=id=>document.getElementById(id);
+let DATA=[],tab='exp',sortK='exp',sortD=1;
+const today=new Date();today.setHours(0,0,0,0);
+function cond(r){ // live condition from the date, so it never goes stale
+  if(!/^\d{4}-\d\d-\d\d$/.test(r.exp||''))return'NoDate';
+  const days=Math.round((new Date(r.exp+'T00:00:00')-today)/864e5);
+  r.days=days;return days<0?'Expired':days<=30?'Soon':'Valid';
+}
+const LBL={Expired:'Expired',Soon:'Expires ≤30d',Valid:'Valid',NoDate:'No date'};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pill=c=>`<span class="pill ${c}">${LBL[c]}</span>`;
+
+fetch('data/register.json',{cache:'no-store'}).then(r=>r.json()).then(j=>{
+  DATA=j.rows;DATA.forEach(r=>r.c=cond(r));
+  $('sub').textContent=`Source: ${j.source} · data updated ${new Date(j.generated).toLocaleString()} · today ${today.toDateString()}`;
+  for(const f of [...new Set(DATA.map(r=>r.floor))].sort((a,b)=>FLOORS.indexOf(a)-FLOORS.indexOf(b)))$('fFloor').add(new Option(f,f));
+  for(const t of [...new Set(DATA.map(r=>r.type))].sort())$('fType').add(new Option(t,t));
+  for(const s of [...new Set(DATA.map(r=>r.status))].sort())$('fStatus').add(new Option(s,s));
+  kpis();render();
+}).catch(e=>$('sub').textContent='Could not load data/register.json — '+e);
+
+function kpis(){
+  const inn=DATA.filter(r=>r.status==='IN'&&r.qty>0),sum=a=>a.reduce((s,r)=>s+r.qty,0);
+  const k=[['Units in stock',sum(inn)],['Expired (units)',sum(inn.filter(r=>r.c==='Expired'))],['Expiring ≤30 days',sum(inn.filter(r=>r.c==='Soon'))],['Stocked, no valid date',sum(inn.filter(r=>r.c==='NoDate'))]];
+  $('kpis').innerHTML=k.map(([l,v])=>`<div class="kpi"><b>${v.toLocaleString()}</b><span>${l}</span></div>`).join('');
+}
+function filtered(){
+  const q=$('q').value.toLowerCase(),f=$('fFloor').value,t=$('fType').value,c=$('fCond').value,s=$('fStatus').value;
+  return DATA.filter(r=>(!q||(r.item+' '+r.location).toLowerCase().includes(q))&&(!f||r.floor===f)&&(!t||r.type===t)&&(!c||r.c===c)&&(!s||r.status===s));
+}
+const COLS={
+ exp:[['item','Item'],['floor','Floor'],['location','Room'],['qty','Qty','n'],['exp','Expires'],['days','Days left','n'],['c','Condition']],
+ reg:[['status','Status'],['type','Type'],['item','Item'],['floor','Floor'],['location','Location'],['qty','Qty','n'],['exp','Expiration'],['c','Condition'],['tx','Transaction']]
+};
+function render(){
+  const isSum=tab==='sum';
+  $('filters').classList.toggle('hide',isSum);
+  if(isSum)return summary();
+  let rows=filtered();
+  if(tab==='exp'){const pick=$('fCond').value;rows=rows.filter(r=>r.status==='IN'&&r.qty>0&&(pick||r.c==='Expired'||r.c==='Soon'));}
+  const cols=COLS[tab];
+  rows.sort((a,b)=>{const x=a[sortK]??'',y=b[sortK]??'';return(x>y?1:x<y?-1:0)*sortD});
+  $('thead').innerHTML='<tr>'+cols.map(c=>`<th class="${c[2]||''}" data-k="${c[0]}">${c[1]}${sortK===c[0]?(sortD>0?' ▲':' ▼'):''}</th>`).join('')+'</tr>';
+  const shown=rows.slice(0,1500);
+  $('tbody').innerHTML=shown.map(r=>'<tr>'+cols.map(([k,,n])=>`<td class="${n||''}">${k==='c'?pill(r.c):esc(r[k]??'')}</td>`).join('')+'</tr>').join('');
+  $('meta').textContent=`${rows.length.toLocaleString()} records`+(rows.length>shown.length?` (showing first ${shown.length} — filter to narrow)`:'');
+}
+function summary(){
+  const inn=DATA.filter(r=>r.status==='IN'),items=[...new Set(inn.map(r=>r.item))].sort();
+  $('thead').innerHTML='<tr><th>Item</th>'+FLOORS.map(f=>`<th class="n">${f}</th>`).join('')+'<th class="n">Total</th></tr>';
+  $('tbody').innerHTML=items.map(i=>{
+    const v=FLOORS.map(f=>inn.filter(r=>r.item===i&&r.floor===f).reduce((s,r)=>s+r.qty,0)),t=v.reduce((a,b)=>a+b,0);
+    return t?`<tr><td>${esc(i)}</td>${v.map(x=>`<td class="n">${x||''}</td>`).join('')}<td class="n"><b>${t}</b></td></tr>`:'';
+  }).join('');
+  $('meta').textContent='Stock quantity (status IN) per floor.';
+}
+$('tabs').onclick=e=>{if(!e.target.dataset.t)return;tab=e.target.dataset.t;sortK=tab==='exp'?'exp':'item';sortD=1;
+  [...$('tabs').children].forEach(b=>b.classList.toggle('on',b===e.target));render();};
+$('thead').onclick=e=>{const k=e.target.dataset.k;if(!k)return;sortD=sortK===k?-sortD:1;sortK=k;render();};
+['q','fFloor','fType','fCond','fStatus'].forEach(i=>$(i).addEventListener('input',render));
+$('csv').onclick=()=>{
+  const cols=COLS[tab],rows=filtered();
+  const csv=[cols.map(c=>c[1]),...rows.map(r=>cols.map(([k])=>k==='c'?LBL[r.c]:r[k]??''))].map(l=>l.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`minibar-${tab}-${today.toISOString().slice(0,10)}.csv`;a.click();
+};
+</script>
+</body>
+</html>
